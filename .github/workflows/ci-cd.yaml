@@ -1,0 +1,106 @@
+name: Review Service CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Production release tag, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI and Dev Deployment
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    uses: CodeReviewer-org/codereviewer-main/.github/workflows/reusable-ci.yml@master
+    with:
+      trigger_event: ${{ github.event_name }}
+      source_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      service_name: review-service
+      image_name: review-service
+      helm_service_key: review
+
+      python_version: "3.10"
+      working_directory: "."
+      requirements_file: requirements.txt
+
+      docker_context: "."
+      dockerfile_path: "./Dockerfile"
+
+      install_command: python -m pip install -r requirements.txt
+      lint_command: ruff check .
+      test_command: pytest -q
+
+      # Set these as GitHub organization/repository variables.
+      sonar_project_key: ${{ vars.SONAR_PROJECT_KEY }}
+      sonar_organization: ${{ vars.SONAR_ORGANIZATION }}
+      snyk_organization: ${{ vars.SNYK_ORGANIZATION }}
+
+      # Set true when security findings should block CI.
+      enforce_security: false
+      snyk_severity_threshold: high
+
+      infra_repository: CodeReviewer-org/platform-deployment
+      dev_infra_ref: main
+      dev_values_path: helm/values-dev.yaml
+
+    secrets:
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+
+  validate-release:
+    name: Validate Manual Release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main branch
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Production releases must be started from the main branch."
+            exit 1
+          fi
+
+  release:
+    name: Manual Production Release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: validate-release
+    uses: CodeReviewer-org/codereviewer-main/.github/workflows/reusable-release.yml@master
+    with:
+      release_tag: ${{ inputs.release_tag }}
+
+      service_name: review-service
+      image_name: review-service
+      helm_service_key: review
+
+      infra_repository: CodeReviewer-org/platform-deployment
+      dev_infra_ref: main
+      prod_infra_ref: main
+      dev_values_path: helm/values-dev.yaml
+      prod_values_path: helm/values-prod.yaml
+
+    secrets:
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+      INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
+      EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
